@@ -26,6 +26,12 @@ import { Spinner } from "./ui/spinner.js";
 import { StatusLine } from "./ui/status-line.js";
 import { StartupProfiler } from "./startup.js";
 import { Welcome } from "./ui/welcome.js";
+import { CronScheduler } from "./cron/scheduler.js";
+import { CronStorage } from "./cron/storage.js";
+import { parseNaturalSchedule } from "./cron/natural-schedule.js";
+import { installLaunchd, uninstallLaunchd } from "./cron/launchd.js";
+import { AutoDream } from "./services/autodream.js";
+import { CronExpressionParser } from "cron-parser";
 
 export interface AppProps {
   apiKey: string;
@@ -100,6 +106,9 @@ function App(props: AppProps) {
   const lastSeenRowId = useRef<number>(0);
   const alwaysAllowed = useRef<Set<string>>(new Set());
   const inputHistory = useRef(new InputHistory());
+  const cronScheduler = useRef<CronScheduler | null>(null);
+  const cronStorage = useRef(new CronStorage(join(configDir, "scheduled_tasks.json")));
+  const store = useRef(new ConfigStore(configDir));
 
   // Permission prompt function for ToolExecutor
   const promptForPermission = useCallback((toolCall: ToolCall): Promise<boolean> => {
@@ -152,10 +161,31 @@ function App(props: AppProps) {
     }
     setSessionId(session.id);
 
+    // Start cron scheduler in session mode
+    const scheduler = new CronScheduler({
+      tasksPath: join(configDir, "scheduled_tasks.json"),
+      resultsDir: join(configDir, "cron-results"),
+      executePrompt: async (prompt: string, promptCwd: string) => {
+        const builder = new ContextBuilder(new ToolRegistry(), promptCwd, configDir);
+        const fullMessage = builder.build(prompt);
+        const response = await apiClient.current.sendMessage(fullMessage);
+        return response.message ?? "Message sent.";
+      },
+      onResult: (_taskId: string, prompt: string, result: string) => {
+        setMessages((prev) => [...prev, { role: "system", content: `[Cron] ${prompt}\n\n${result}` }]);
+      },
+    });
+    scheduler.start();
+    cronScheduler.current = scheduler;
+
     profiler.checkpoint('session-ready');
     if (props.verbose) {
       console.error(`Startup:\n${profiler.summary()}`);
     }
+
+    return () => {
+      cronScheduler.current?.stop();
+    };
   }, [resumeSessionId, cwd]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Set up chat.db poller for receiving messages
@@ -237,7 +267,40 @@ function App(props: AppProps) {
             store.update({ apiKey: key });
             apiClient.current = new PokeApiClient(key);
           },
-          quit: () => process.exit(0),
+          quit: () => {
+            // Trigger autodream on quit if thresholds are met
+            const dream = new AutoDream({
+              sessionsDir: join(configDir, "sessions"),
+              memoryDir: join(cwd, ".poke", "memory", "autodream"),
+              statePath: join(configDir, "consolidation-state.json"),
+              lockPath: join(configDir, "consolidation.lock"),
+              config: store.current.load().autoDream,
+              consolidate: async (transcript: string) => {
+                const consolidationPrompt = `You are a memory consolidation agent. Read the following session transcripts and extract key facts, decisions, user preferences, and recurring patterns worth remembering for future sessions. Write concise markdown files. Format your response as fenced code blocks with the filename as the language identifier.\n\nTranscripts:\n${transcript.slice(0, 50000)}`;
+                try {
+                  const response = await apiClient.current.sendMessage(consolidationPrompt);
+                  const text = response.message ?? "";
+                  const files: { filename: string; content: string }[] = [];
+                  const blockPattern = /```(\S+\.md)\n([\s\S]*?)```/g;
+                  let blockMatch: RegExpExecArray | null;
+                  while ((blockMatch = blockPattern.exec(text)) !== null) {
+                    files.push({ filename: blockMatch[1], content: blockMatch[2].trim() });
+                  }
+                  if (files.length === 0 && text.trim()) {
+                    files.push({ filename: "consolidated.md", content: text.trim() });
+                  }
+                  return files;
+                } catch {
+                  return [];
+                }
+              },
+            });
+            if (dream.shouldRun()) {
+              dream.run().catch(() => {});
+            }
+            cronScheduler.current?.stop();
+            process.exit(0);
+          },
           getMemoryList: () => {
             const dirs = [join(cwd, ".poke/memory"), join(cwd, ".claude/memory"), join(configDir, "memory")];
             const files: string[] = [];
@@ -324,6 +387,111 @@ function App(props: AppProps) {
           },
           getReducedMotion: () => reducedMotion,
           setReducedMotion: (on: boolean) => setReducedMotion(on),
+          cronAdd: async (scheduleOrNatural: string, prompt: string) => {
+            let schedule: string;
+            let actualPrompt: string;
+            let oneShot = false;
+
+            if (prompt) {
+              schedule = scheduleOrNatural;
+              actualPrompt = prompt.replace(" [oneshot]", "");
+              oneShot = prompt.endsWith("[oneshot]");
+            } else {
+              // Natural language: try to split schedule from prompt
+              const patterns = [
+                /^(every\s+\d+\s+(?:minute|hour)s?)\s+(.+)$/i,
+                /^(every\s+(?:day|weekday|hour|minute)\s+at\s+\S+)\s+(.+)$/i,
+                /^(every\s+(?:day|weekday|hour|minute))\s+(.+)$/i,
+                /^(every\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+at\s+\S+)?)\s+(.+)$/i,
+                /^((?:at|once\s+at)\s+\S+)\s+(.+)$/i,
+                /^(in\s+\d+\s+(?:hour|minute)s?)\s+(.+)$/i,
+              ];
+              for (const pattern of patterns) {
+                const match = scheduleOrNatural.match(pattern);
+                if (match) {
+                  const nlParsed = parseNaturalSchedule(match[1]);
+                  if (nlParsed) {
+                    schedule = nlParsed.cron;
+                    actualPrompt = match[2];
+                    oneShot = nlParsed.oneShot;
+                    const task = cronStorage.current.add(actualPrompt, schedule, cwd, { oneShot });
+                    const next = CronExpressionParser.parse(schedule).next().toDate();
+                    return `Task ${task.id} created.\nSchedule: ${schedule}${oneShot ? " (one-shot)" : ""}\nNext run: ${next!.toLocaleString()}\nPrompt: ${actualPrompt}`;
+                  }
+                }
+              }
+              return `Could not parse schedule. Use cron syntax:\n  /cron add */30 * * * * check build status\n\nOr natural language:\n  /cron every 30 minutes check build status`;
+            }
+
+            try {
+              const task = cronStorage.current.add(actualPrompt, schedule, cwd, { oneShot });
+              const next = CronExpressionParser.parse(schedule).next().toDate();
+              return `Task ${task.id} created.\nSchedule: ${schedule}${oneShot ? " (one-shot)" : ""}\nNext run: ${next!.toLocaleString()}\nPrompt: ${actualPrompt}`;
+            } catch (err) {
+              return err instanceof Error ? err.message : String(err);
+            }
+          },
+          cronList: () => {
+            const tasks = cronStorage.current.list();
+            if (tasks.length === 0) return "No scheduled tasks.";
+            return tasks.map((t) => {
+              const next = (() => { try { return CronExpressionParser.parse(t.schedule).next().toDate()?.toLocaleString() ?? "?"; } catch { return "?"; } })();
+              return `  ${t.id}  ${t.schedule.padEnd(15)} ${t.oneShot ? "(once) " : ""}runs: ${t.runCount}  next: ${next}\n         ${t.prompt.slice(0, 60)}`;
+            }).join("\n\n");
+          },
+          cronRemove: (id: string) => {
+            return cronStorage.current.remove(id) ? `Removed task ${id}.` : `Task ${id} not found.`;
+          },
+          cronResults: (id?: string) => {
+            const resultsDir = join(configDir, "cron-results");
+            try {
+              const files = readdirSync(resultsDir)
+                .filter((f: string) => !id || f.startsWith(id))
+                .sort()
+                .slice(-10);
+              if (files.length === 0) return "No results yet.";
+              return files.map((f: string) => {
+                const content = readFileSync(join(resultsDir, f), "utf-8");
+                return `--- ${f} ---\n${content.slice(0, 2000)}`;
+              }).join("\n\n");
+            } catch {
+              return "No results yet.";
+            }
+          },
+          cronInstall: () => {
+            const binPath = process.argv[1];
+            const logPath = join(configDir, "daemon.log");
+            return installLaunchd(binPath, logPath);
+          },
+          cronUninstall: () => {
+            return uninstallLaunchd();
+          },
+          runDream: async () => {
+            const dream = new AutoDream({
+              sessionsDir: join(configDir, "sessions"),
+              memoryDir: join(cwd, ".poke", "memory", "autodream"),
+              statePath: join(configDir, "consolidation-state.json"),
+              lockPath: join(configDir, "consolidation.lock"),
+              config: store.current.load().autoDream,
+              consolidate: async (transcript: string) => {
+                const consolidationPrompt = `You are a memory consolidation agent. Read the following session transcripts and extract key facts, decisions, user preferences, and recurring patterns worth remembering for future sessions. Write concise markdown files. Format your response as one or more fenced code blocks with the filename as the language identifier, like:\n\n\`\`\`patterns.md\ncontent here\n\`\`\`\n\nTranscripts:\n${transcript.slice(0, 50000)}`;
+                const response = await apiClient.current.sendMessage(consolidationPrompt);
+                const text = response.message ?? "";
+                const files: { filename: string; content: string }[] = [];
+                const blockPattern = /```(\S+\.md)\n([\s\S]*?)```/g;
+                let blockMatch: RegExpExecArray | null;
+                while ((blockMatch = blockPattern.exec(text)) !== null) {
+                  files.push({ filename: blockMatch[1], content: blockMatch[2].trim() });
+                }
+                if (files.length === 0 && text.trim()) {
+                  files.push({ filename: "consolidated.md", content: text.trim() });
+                }
+                return files;
+              },
+            });
+            await dream.run();
+            return "Memory consolidation complete.";
+          },
         };
 
         const result = await routeCommand(trimmed, ctx);
