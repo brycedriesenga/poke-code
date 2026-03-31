@@ -194,4 +194,30 @@ describe("conversationLoop", () => {
     expect(executor.execute).not.toHaveBeenCalled();
     expect(events[events.length - 1]).toEqual({ type: "done" });
   });
+
+  it("uses sendMessageFn instead of apiClient when provided", async () => {
+    const api = mockApiClient();
+    const ctx = mockContextBuilder();
+    const executor = mockExecutor();
+    const sendMessageFn = vi.fn(async (_text: string) => {});
+
+    const gen = conversationLoop("hello mcp", {
+      apiClient: api,
+      executor,
+      contextBuilder: ctx,
+      cwd: "/tmp/test-project",
+      sendMessageFn,
+      pollFn: async (onChunk) => {
+        onChunk("done");
+        return "done";
+      },
+    });
+
+    for await (const _event of gen) {
+      // drain
+    }
+
+    expect(sendMessageFn).toHaveBeenCalledWith("[context] hello mcp");
+    expect(api.sendMessage).not.toHaveBeenCalled();
+  });
 });

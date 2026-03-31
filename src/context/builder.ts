@@ -21,8 +21,13 @@ export class ContextBuilder {
     return this.skills.map((s) => s.name);
   }
 
-  build(userMessage: string, systemPromptOverride?: string): string {
+  build(
+    userMessage: string,
+    systemPromptOverride?: string,
+    options: { transport?: "imessage" | "mcp" } = {},
+  ): string {
     const parts: string[] = [];
+    const transport = options.transport ?? "imessage";
 
     if (systemPromptOverride) {
       parts.push(systemPromptOverride);
@@ -51,7 +56,7 @@ RULES:
 - You can include natural language text between commands
 - CRITICAL: For [write] and [edit], only ONE file per block. Fully close [/write] or [/new] before starting the next file. Never nest write/edit blocks.
 - Send each file completely (open tag, full content, close tag) before moving to the next file
-- Do NOT reference MCP tools or MCP servers — there is no MCP connection
+- ${transport === "mcp" ? 'When connected over MCP transport, deliver user-visible replies by calling the "reply_to_terminal" tool with the full response text in its "text" field.' : "Do NOT reference MCP tools or MCP servers — there is no MCP connection"}
 - The bracket command is all you need — do not wrap in code blocks or quotes${this.skills.length > 0 ? "\n- If you have relevant skills loaded, follow their instructions for specialized tasks." : ""}`);
       parts.push(`Working directory: ${this.projectDir}`);
       const dirListing = this.loadDirectoryListing();

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { normalizeConfig } from "./normalize.js";
 import type { PokeConfig } from "../types.js";
 import { DEFAULT_CONFIG } from "../types.js";
 
@@ -36,14 +37,17 @@ export function validateSettings(partial: Record<string, unknown>): ValidationRe
   if (partial.vimMode !== undefined && typeof partial.vimMode !== "boolean") {
     errors.push("Invalid vimMode: must be a boolean");
   }
+  if (partial.transport !== undefined && partial.transport !== "imessage" && partial.transport !== "mcp") {
+    errors.push(`Invalid transport: ${partial.transport}`);
+  }
 
   return errors.length === 0 ? { valid: true } : { valid: false, errors };
 }
 
 export function mergeSettings(sources: SettingsSource[]): PokeConfig {
-  let merged: PokeConfig = { ...DEFAULT_CONFIG };
+  let merged: PokeConfig = normalizeConfig(DEFAULT_CONFIG);
   for (const source of sources) {
-    merged = { ...merged, ...source.settings };
+    merged = normalizeConfig({ ...merged, ...source.settings });
   }
   return merged;
 }

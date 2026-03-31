@@ -72,8 +72,45 @@ async function runSetupWizard(store: ConfigStore, _configDir: string): Promise<v
     }
   }
 
-  // Step 3: Select Poke handle from chat.db
-  console.log("  Step 2: iMessage Contact");
+  // Step 3: Select transport
+  console.log("  Step 2: Transport");
+  console.log("  1) iMessage (macOS)\n  2) MCP WebSocket (cross-platform)\n");
+  const transportChoice = await promptForInput("  Select transport (1/2, default: 1): ");
+  const transport = transportChoice.trim() === "2" ? "mcp" : "imessage";
+  store.update({ transport });
+
+  if (transport === "mcp") {
+    console.log("\n  Step 3: MCP Connection");
+    const useLocal = await promptForInput("  Use built-in local MCP bridge server? (Y/n): ");
+    if (useLocal.trim().toLowerCase() !== "n") {
+      const mcp = store.load().mcp;
+      const host = mcp.localServer.host;
+      const port = mcp.localServer.port;
+      const serverUrl = `ws://${host}:${port}`;
+      store.update({
+        mcp: { ...mcp, serverUrl, localServer: { ...mcp.localServer, enabled: true } },
+      });
+      console.log(`  Local MCP bridge enabled at ${serverUrl}.\n`);
+    } else {
+      const currentUrl = store.load().mcp.serverUrl;
+      if (currentUrl) {
+        console.log(`  Current MCP URL: ${currentUrl}`);
+      }
+      const serverUrl = await promptForInput("  MCP server URL (wss://...): ");
+      if (serverUrl) {
+        const mcp = store.load().mcp;
+        store.update({ mcp: { ...mcp, serverUrl, localServer: { ...mcp.localServer, enabled: false } } });
+        console.log("  MCP server URL saved.\n");
+      } else {
+        console.log("  Skipped. You can set mcp.serverUrl in ~/.poke/config.json later.\n");
+      }
+    }
+    console.log("  ✓ Setup complete! Run poke-code to start.\n");
+    return;
+  }
+
+  // Step 4: Select Poke handle from chat.db
+  console.log("  Step 3: iMessage Contact");
   console.log("  Select your Poke contact to receive responses in the terminal.\n");
 
   const dbPath = join(home, "Library", "Messages", "chat.db");
@@ -219,10 +256,12 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  // First-run: if no API key or no chatId, run setup wizard
+  // First-run: run setup wizard when required fields are missing for the selected transport
   let apiKey = store.resolveApiKey();
   const config0 = store.load();
-  if (!apiKey || !config0.chatId) {
+  const missingTransportSetup =
+    config0.transport === "mcp" ? !config0.mcp.serverUrl : !config0.imessage.chatId || !config0.imessage.handleId;
+  if (!apiKey || missingTransportSetup) {
     await runSetupWizard(store, configDir);
     apiKey = store.resolveApiKey();
     if (!apiKey) {
@@ -271,8 +310,14 @@ async function main(): Promise<void> {
     apiKey,
     configDir,
     cwd,
-    chatId: config.chatId,
-    handleId: config.handleId,
+    transport: config.transport,
+    mcpServerUrl: config.mcp.serverUrl,
+    mcpProtocols: config.mcp.protocols,
+    mcpLocalServerEnabled: config.mcp.localServer.enabled,
+    mcpLocalServerHost: config.mcp.localServer.host,
+    mcpLocalServerPort: config.mcp.localServer.port,
+    chatId: config.transport === "imessage" ? config.imessage.chatId : undefined,
+    handleId: config.transport === "imessage" ? config.imessage.handleId : undefined,
     dbPath,
     permissionMode,
     verbose: argv.verbose,
