@@ -6,7 +6,8 @@ import { Box, render, Text, useInput } from "ink";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PokeApiClient } from "./api/client.js";
 import { conversationLoop, createPollFn } from "./api/conversation.js";
-import { routeCommand } from "./commands/router.js";
+import { routeCommand, getCommandList } from "./commands/router.js";
+import { matchCommands } from "./ui/typeahead.js";
 import { ConfigStore } from "./config/store.js";
 import { ContextBuilder } from "./context/builder.js";
 import { imsgSend } from "./db/imsg-sender.js";
@@ -553,6 +554,14 @@ function App(props: AppProps) {
       return;
     }
 
+    if (key.tab && !waiting && !pendingPermission && input.startsWith('/')) {
+      const matches = matchCommands(input, getCommandList());
+      if (matches.length === 1) {
+        setInput(`/${matches[0].name} `);
+      }
+      return;
+    }
+
     if (key.backspace || key.delete) {
       setInput((prev) => prev.slice(0, -1));
       return;
@@ -601,6 +610,13 @@ function App(props: AppProps) {
               <Text>{input}</Text>
               <Text color="gray">{"█"}</Text>
             </Box>
+            {input.startsWith("/") && input.length > 0 && !input.includes(" ") && (
+              <Box marginLeft={2}>
+                <Text color="gray" dimColor>
+                  {matchCommands(input, getCommandList()).slice(0, 5).map(c => `/${c.name}`).join("  ")}
+                </Text>
+              </Box>
+            )}
           </Box>
         )}
 
