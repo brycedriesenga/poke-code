@@ -40,6 +40,17 @@ describe("ContextBuilder", () => {
     expect(result).toContain("my test message");
   });
 
+  it("includes MCP reply_to_terminal guidance when transport is mcp", () => {
+    const projectDir = join(FIXTURES_DIR, "mcp-prompt");
+    const globalDir = join(FIXTURES_DIR, "mcp-global");
+    mkdirSync(projectDir, { recursive: true });
+    mkdirSync(globalDir, { recursive: true });
+    const builder = makeBuilder(projectDir, globalDir);
+    const result = builder.build("hello", undefined, { transport: "mcp" });
+    expect(result).toContain("reply_to_terminal");
+    expect(result).not.toContain("there is no MCP connection");
+  });
+
   it("includes working directory in rules", () => {
     const projectDir = join(FIXTURES_DIR, "wd-test");
     const globalDir = join(FIXTURES_DIR, "wd-global");
