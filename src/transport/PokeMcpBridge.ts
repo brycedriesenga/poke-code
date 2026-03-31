@@ -4,8 +4,9 @@ const TERMINAL_INSTRUCTION =
   "[TERMINAL SESSION — MANDATORY]\n" +
   "The user is chatting in a terminal session.\n" +
   "Do not send replies via iMessage/SMS/Telegram.\n" +
-  "Do not write chat text directly.\n" +
-  "Call reply_to_terminal with your full response text.\n" +
+  "Do not write any text in the chat response body.\n" +
+  "Your only response path is the reply_to_terminal tool.\n" +
+  "Call reply_to_terminal with the full answer.\n" +
   "[END TERMINAL SESSION]\n\n";
 
 interface PokeClientLike {
@@ -77,7 +78,8 @@ export class PokeMcpBridge {
       this.options.onError?.(`MCP tunnel error: ${msg}`);
     });
 
-    await this.tunnel.start();
+    const startInfo = await this.tunnel.start();
+    await this.syncTools(startInfo, token);
   }
 
   async sendMessage(text: string): Promise<void> {
@@ -97,5 +99,25 @@ export class PokeMcpBridge {
       this.tunnel = null;
     }
     await this.mcpServer.stop();
+  }
+
+  private async syncTools(startInfo: unknown, token: string): Promise<void> {
+    const connectionId =
+      (startInfo as { connectionId?: string } | null | undefined)?.connectionId ??
+      ((this.tunnel as { info?: { connectionId?: string } } | null)?.info?.connectionId ?? "");
+    if (!connectionId) {
+      this.options.onError?.("MCP tunnel connected but no connectionId was available for tool sync.");
+      return;
+    }
+
+    const baseUrl = process.env.POKE_API ?? "https://poke.com/api/v1";
+    const res = await fetch(`${baseUrl}/mcp/connections/${connectionId}/sync-tools`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!res.ok) {
+      this.options.onError?.(`MCP tools sync failed: HTTP ${res.status}`);
+    }
   }
 }
