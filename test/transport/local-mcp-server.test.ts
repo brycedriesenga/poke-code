@@ -34,4 +34,28 @@ describe("LocalMcpServer", () => {
 
     ws.close();
   });
+
+  it("maps send-only acknowledgement replies to a helpful MCP hint", async () => {
+    const apiClient = {
+      sendMessage: vi.fn(async (_text: string) => ({ message: "Message sent successfully" })),
+    } as any;
+
+    server = new LocalMcpServer({ host: "127.0.0.1", port: 8898, apiClient });
+    await server.start();
+
+    const ws = new WebSocket("ws://127.0.0.1:8898");
+    await new Promise<void>((resolve) => ws.once("open", () => resolve()));
+
+    const responsePromise = new Promise<{ id?: string; text?: string }>((resolve) => {
+      ws.once("message", (data) => resolve(JSON.parse(data.toString())));
+    });
+
+    ws.send(JSON.stringify({ type: "user_message", id: "hint", text: "hello" }));
+    const response = await responsePromise;
+
+    expect(response.id).toBe("hint");
+    expect(response.text).toContain("did not return a chat reply");
+
+    ws.close();
+  });
 });

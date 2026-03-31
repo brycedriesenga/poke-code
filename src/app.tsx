@@ -22,7 +22,7 @@ import { StartupProfiler } from "./startup.js";
 import { IMessageTransport } from "./transport/IMessageTransport.js";
 import { ToolExecutor } from "./tools/executor.js";
 import { ToolRegistry } from "./tools/registry.js";
-import { MCPTransport } from "./transport/MCPTransport.js";
+import { PokeMcpBridge } from "./transport/PokeMcpBridge.js";
 import type { PermissionMode, ToolCall, ToolResult } from "./types.js";
 import { formatErrorWithHint } from "./ui/error-display.js";
 import { InputHistory } from "./ui/input-history.js";
@@ -110,7 +110,7 @@ function App(props: AppProps) {
   const contextBuilder = useRef(new ContextBuilder(registry.current, cwd, configDir));
   const sessionManager = useRef(new SessionManager(`${configDir}/sessions`));
   const imessageTransportRef = useRef<IMessageTransport | null>(null);
-  const mcpTransportRef = useRef<MCPTransport | null>(null);
+  const mcpBridgeRef = useRef<PokeMcpBridge | null>(null);
   const alwaysAllowed = useRef<Set<string>>(new Set());
   const inputHistory = useRef(new InputHistory());
   const cronScheduler = useRef<CronScheduler | null>(null);
@@ -217,27 +217,28 @@ function App(props: AppProps) {
     setMessageCount((prev) => prev + 1);
   }, []);
 
-  // Set up MCP transport for receiving messages
+  // Set up MCP tunnel bridge for receiving terminal replies
   useEffect(() => {
     if (transport !== "mcp") return;
-    if (!mcpServerUrl) return;
 
-    const mcpTransport = new MCPTransport({ url: mcpServerUrl, protocols: mcpProtocols });
-    mcpTransportRef.current = mcpTransport;
-    mcpTransport.onMessage((message) => {
-      appendMessage({ role: "assistant", content: message });
+    const bridge = new PokeMcpBridge({
+      apiKey,
+      onReply: (message) => appendMessage({ role: "assistant", content: message }),
+      onNotification: (message) => appendMessage({ role: "system", content: `[MCP] ${message}` }),
+      onError: (message) => appendMessage({ role: "system", content: formatErrorWithHint(message) }),
     });
+    mcpBridgeRef.current = bridge;
 
-    void mcpTransport.initialize().catch((err: unknown) => {
+    void bridge.initialize().catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
       appendMessage({ role: "system", content: formatErrorWithHint(`MCP connection failed: ${msg}`) });
     });
 
     return () => {
-      mcpTransport.close();
-      mcpTransportRef.current = null;
+      void bridge.close();
+      mcpBridgeRef.current = null;
     };
-  }, [transport, mcpServerUrl, mcpProtocols, appendMessage]);
+  }, [transport, apiKey, appendMessage]);
 
   const handleSend = useCallback(
     async (text: string) => {
@@ -564,25 +565,17 @@ function App(props: AppProps) {
         let sendResultsFn: ((text: string) => Promise<void>) | undefined;
 
         if (transport === "mcp") {
-          if (!mcpTransportRef.current) {
-            throw new Error("MCP transport is not configured. Set mcp.serverUrl and restart poke-code.");
+          if (!mcpBridgeRef.current) {
+            throw new Error("MCP bridge is not configured. Restart poke-code to reconnect the tunnel.");
           }
-          let pendingResponse: Promise<string> | null = null;
-          sendMessageFn = async (text: string) => {
-            pendingResponse = mcpTransportRef.current?.request(text, 60_000) ?? null;
-            if (!pendingResponse) {
-              throw new Error("MCP transport became unavailable while sending.");
-            }
-          };
-          pollFn = async (onChunk) => {
-            if (!pendingResponse) {
-              throw new Error("No MCP response is pending.");
-            }
-            const response = await pendingResponse;
-            pendingResponse = null;
-            onChunk(response);
-            return response;
-          };
+
+          await mcpBridgeRef.current.sendMessage(trimmed);
+          appendMessage({
+            role: "system",
+            content: "Message sent via MCP tunnel. Waiting for reply_to_terminal...",
+          });
+          setWaiting(false);
+          return;
         } else {
           if (!imessageTransportRef.current) {
             const fullMessage = contextBuilder.current.build(trimmed, systemPrompt);

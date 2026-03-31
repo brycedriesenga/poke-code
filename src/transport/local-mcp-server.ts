@@ -76,7 +76,16 @@ export class LocalMcpServer {
 
     try {
       const response = await this.apiClient.sendMessage(text);
-      socket.send(JSON.stringify({ id, text: response.message ?? "" }));
+      const rawReply = response.message ?? "";
+      const normalizedReply = rawReply.trim().toLowerCase();
+
+      const fallbackReply =
+        "Message sent successfully".toLowerCase() === normalizedReply ||
+        "message sent succesfully" === normalizedReply
+          ? "Poke API accepted your message but did not return a chat reply. The local MCP bridge is send-only; use iMessage transport for replies or connect poke-code to an MCP server that returns assistant text."
+          : rawReply;
+
+      socket.send(JSON.stringify({ id, text: fallbackReply }));
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       socket.send(JSON.stringify({ id, type: "error", message }));
