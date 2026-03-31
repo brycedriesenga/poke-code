@@ -16,6 +16,7 @@ import { SessionManager } from "./session/manager.js";
 import { ToolExecutor } from "./tools/executor.js";
 import { ToolRegistry } from "./tools/registry.js";
 import type { PermissionMode, ToolCall, ToolResult } from "./types.js";
+import { InputHistory } from "./ui/input-history.js";
 import { MessageView } from "./ui/message.js";
 import { PermissionPrompt } from "./ui/permission.js";
 import { Spinner } from "./ui/spinner.js";
@@ -93,6 +94,7 @@ function App(props: AppProps) {
   const pollerRef = useRef<ChatDbPoller | null>(null);
   const lastSeenRowId = useRef<number>(0);
   const alwaysAllowed = useRef<Set<string>>(new Set());
+  const inputHistory = useRef(new InputHistory());
 
   // Permission prompt function for ToolExecutor
   const promptForPermission = useCallback((toolCall: ToolCall): Promise<boolean> => {
@@ -179,6 +181,7 @@ function App(props: AppProps) {
     async (text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
+      inputHistory.current.push(trimmed);
 
       // Hide welcome on first message
       if (showWelcome) setShowWelcome(false);
@@ -531,6 +534,16 @@ function App(props: AppProps) {
     // Ctrl+E: toggle multi-line mode
     if (key.ctrl && ch === "e") {
       setMultiLine((prev) => !prev);
+      return;
+    }
+
+    if (key.upArrow && !waiting && !pendingPermission) {
+      const prev = inputHistory.current.up();
+      if (prev) setInput(prev);
+      return;
+    }
+    if (key.downArrow && !waiting && !pendingPermission) {
+      setInput(inputHistory.current.down());
       return;
     }
 
