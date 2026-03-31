@@ -9,7 +9,10 @@ import { PokeApiClient } from "../src/api/client.js";
 import { renderApp } from "../src/app.js";
 import { ConfigStore } from "../src/config/store.js";
 import { copyClaudeConfig } from "../src/config/wizard.js";
+import { LocalMcpServer } from "../src/transport/local-mcp-server.js";
 import type { PermissionMode } from "../src/types.js";
+
+const DEFAULT_LOCAL_MCP_URL = "ws://127.0.0.1:4317";
 
 function promptForInput(question: string): Promise<string> {
   return new Promise((resolve) => {
@@ -81,17 +84,9 @@ async function runSetupWizard(store: ConfigStore, _configDir: string): Promise<v
 
   if (transport === "mcp") {
     console.log("\n  Step 3: MCP Connection");
-    const currentUrl = store.load().mcp.serverUrl;
-    if (currentUrl) {
-      console.log(`  Current MCP URL: ${currentUrl}`);
-    }
-    const serverUrl = await promptForInput("  MCP server URL (wss://...): ");
-    if (serverUrl) {
-      store.update({ mcp: { ...store.load().mcp, serverUrl } });
-      console.log("  MCP server URL saved.\n");
-    } else {
-      console.log("  Skipped. You can set mcp.serverUrl in ~/.poke/config.json later.\n");
-    }
+    store.update({ mcp: { ...store.load().mcp, serverUrl: DEFAULT_LOCAL_MCP_URL } });
+    console.log(`  Local MCP server URL set to ${DEFAULT_LOCAL_MCP_URL}.`);
+    console.log("  poke-code will auto-start this local MCP server when you run it.\n");
     console.log("  ✓ Setup complete! Run poke-code to start.\n");
     return;
   }
@@ -260,6 +255,7 @@ async function main(): Promise<void> {
   const cwd = process.cwd();
   const permissionMode = (argv["permission-mode"] as PermissionMode) ?? config.permissionMode;
   const dbPath = join(homedir(), "Library", "Messages", "chat.db");
+  let mcpServerUrl = config.mcp.serverUrl;
 
   // Positional message — first non-option arg
   const positionalMessage = (argv._ as string[]).join(" ").trim() || undefined;
@@ -293,12 +289,37 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  if (config.transport === "mcp") {
+    mcpServerUrl = mcpServerUrl ?? DEFAULT_LOCAL_MCP_URL;
+    if (!config.mcp.serverUrl) {
+      store.update({ mcp: { ...config.mcp, serverUrl: mcpServerUrl } });
+    }
+
+    const parsed = new URL(mcpServerUrl);
+    const isLocalHost = parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost";
+    if (parsed.protocol === "ws:" && isLocalHost) {
+      const port = parsed.port ? Number.parseInt(parsed.port, 10) : 80;
+      const localMcpServer = new LocalMcpServer({
+        host: parsed.hostname,
+        port,
+        apiClient: new PokeApiClient(apiKey),
+      });
+      await localMcpServer.start();
+      const shutdown = () => {
+        void localMcpServer.stop();
+      };
+      process.once("SIGINT", shutdown);
+      process.once("SIGTERM", shutdown);
+      process.once("exit", shutdown);
+    }
+  }
+
   renderApp({
     apiKey,
     configDir,
     cwd,
     transport: config.transport,
-    mcpServerUrl: config.mcp.serverUrl,
+    mcpServerUrl,
     mcpProtocols: config.mcp.protocols,
     chatId: config.transport === "imessage" ? config.imessage.chatId : undefined,
     handleId: config.transport === "imessage" ? config.imessage.handleId : undefined,
