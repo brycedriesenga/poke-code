@@ -38,7 +38,8 @@ export async function startDaemon(): Promise<void> {
 
   const apiClient = new PokeApiClient(apiKey);
   const registry = new ToolRegistry();
-  const useImsg = config.chatId ? await canImsgSend() : false;
+  const imsgChatId = config.transport === "imessage" ? config.imessage.chatId : undefined;
+  const useImsg = imsgChatId ? await canImsgSend() : false;
 
   const scheduler = new CronScheduler({
     tasksPath: join(configDir, "scheduled_tasks.json"),
@@ -49,7 +50,7 @@ export async function startDaemon(): Promise<void> {
       const response = await apiClient.sendMessage(fullMessage);
       return response.message ?? "Message sent.";
     },
-    imsgSend: useImsg && config.chatId ? (text: string) => imsgSend(config.chatId!, text) : undefined,
+    imsgSend: useImsg && imsgChatId ? (text: string) => imsgSend(imsgChatId, text) : undefined,
   });
 
   scheduler.start();

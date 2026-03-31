@@ -91,6 +91,16 @@ describe("ToolExecutor", () => {
     expect(formatted).toContain("Error: Tool bash was denied by user");
     expect(formatted).toMatch(/^Tool results:/);
   });
+
+  it("passes through reply_to_terminal text output", async () => {
+    const registry = new ToolRegistry();
+    const executor = new ToolExecutor(registry, "default");
+    const call: ToolCall = { tool: "reply_to_terminal", params: { text: "hello terminal" } };
+    const results = await executor.execute([call]);
+    expect(results).toHaveLength(1);
+    expect(results[0].error).toBeUndefined();
+    expect(results[0].output).toBe("hello terminal");
+  });
 });
 
 describe("executeTool generator", () => {

@@ -53,20 +53,70 @@ export interface SessionMeta {
 
 export interface PokeConfig {
   apiKey?: string;
+  transport: "imessage" | "mcp";
+  imessage: {
+    enabled: boolean;
+    chatId?: number;
+    handleId?: number;
+    handleIdentifier?: string;
+    dbPath?: string;
+    pollIntervalNormal: number;
+    pollIntervalFast: number;
+    fastPollDuration: number;
+  };
+  mcp: {
+    enabled: boolean;
+    serverUrl?: string;
+    protocols: string[];
+    authTokenEnv?: string;
+    reconnect: {
+      enabled: boolean;
+      initialDelayMs: number;
+      maxDelayMs: number;
+      multiplier: number;
+      jitter: boolean;
+    };
+    requestTimeoutMs: number;
+  };
+  /** @deprecated use imessage.handleId */
   handleId?: number;
+  /** @deprecated use imessage.chatId */
   chatId?: number;
+  /** @deprecated use imessage.handleIdentifier */
   handleIdentifier?: string;
   permissionMode: PermissionMode;
   vimMode: boolean;
   theme: string;
+  /** @deprecated use imessage.pollIntervalNormal */
   pollIntervalNormal: number;
+  /** @deprecated use imessage.pollIntervalFast */
   pollIntervalFast: number;
+  /** @deprecated use imessage.fastPollDuration */
   fastPollDuration: number;
   reducedMotion: boolean;
   autoDream: AutoDreamConfig;
 }
 
 export const DEFAULT_CONFIG: PokeConfig = {
+  transport: "imessage",
+  imessage: {
+    enabled: true,
+    pollIntervalNormal: 3000,
+    pollIntervalFast: 1500,
+    fastPollDuration: 30000,
+  },
+  mcp: {
+    enabled: false,
+    protocols: [],
+    reconnect: {
+      enabled: true,
+      initialDelayMs: 1000,
+      maxDelayMs: 15000,
+      multiplier: 2,
+      jitter: true,
+    },
+    requestTimeoutMs: 30000,
+  },
   permissionMode: "default",
   vimMode: false,
   theme: "default",

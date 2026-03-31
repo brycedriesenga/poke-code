@@ -181,6 +181,8 @@ export interface ConversationOptions {
   maxToolLoops?: number;
   pollFn: PollFn;
   sendResultsFn?: SendResultsFn; // Optional: imsg send for tool results (bypasses API)
+  sendMessageFn?: (text: string) => Promise<void>;
+  contextOptions?: { transport?: "imessage" | "mcp" };
 }
 
 export async function* conversationLoop(
@@ -197,12 +199,18 @@ export async function* conversationLoop(
     maxToolLoops = 10,
     pollFn,
     sendResultsFn,
+    sendMessageFn,
+    contextOptions,
   } = options;
 
   // Build context and send initial message
-  const fullMessage = contextBuilder.build(userMessage, systemPrompt);
+  const fullMessage = contextBuilder.build(userMessage, systemPrompt, contextOptions);
   try {
-    await apiClient.sendMessage(fullMessage);
+    if (sendMessageFn) {
+      await sendMessageFn(fullMessage);
+    } else {
+      await apiClient.sendMessage(fullMessage);
+    }
   } catch (err) {
     yield { type: "error", message: err instanceof Error ? err.message : String(err) };
     return;
@@ -269,6 +277,8 @@ export async function* conversationLoop(
     try {
       if (sendResultsFn) {
         await sendResultsFn(formatted);
+      } else if (sendMessageFn) {
+        await sendMessageFn(formatted);
       } else {
         await apiClient.sendMessage(formatted);
       }
