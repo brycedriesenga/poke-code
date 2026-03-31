@@ -23,6 +23,7 @@ const toolFunctions: Record<string, (params: Record<string, unknown>) => Promise
   list_dir: (p) => listDirTool(p as { path: string }),
   web_search: (p) => webSearchTool(p as { query: string; limit?: number }),
   web_fetch: (p) => webFetchTool(p as { url: string; maxLength?: number }),
+  reply_to_terminal: async (p) => String(p.text ?? ""),
 };
 
 export async function* executeTool(
@@ -99,7 +100,7 @@ export class ToolExecutor {
    * Read-only tools run in parallel (up to 5). Write/bash tools run sequentially.
    */
   async execute(toolCalls: ToolCall[], concurrency = 5): Promise<ToolResult[]> {
-    const READ_TOOLS = new Set(["read_file", "list_dir", "glob", "grep", "web_search", "web_fetch"]);
+    const READ_TOOLS = new Set(["read_file", "list_dir", "glob", "grep", "web_search", "web_fetch", "reply_to_terminal"]);
 
     // Separate read-only (parallelizable) from write (sequential)
     const readCalls: ToolCall[] = [];

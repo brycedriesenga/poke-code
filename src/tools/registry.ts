@@ -1,6 +1,6 @@
 import type { PermissionMode, ToolDefinition, ToolPermission } from "../types.js";
 
-const READ_TOOLS = new Set(["read_file", "glob", "grep", "list_dir", "web_search", "web_fetch"]);
+const READ_TOOLS = new Set(["read_file", "glob", "grep", "list_dir", "web_search", "web_fetch", "reply_to_terminal"]);
 
 const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
@@ -75,6 +75,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     params: {
       query: { type: "string", required: true, description: "Search query" },
       limit: { type: "number", required: false, description: "Max results (default: 5)" },
+    },
+    permission: "auto",
+  },
+  {
+    name: "reply_to_terminal",
+    description: "Send plain text back to the active terminal transport session.",
+    params: {
+      text: { type: "string", required: true, description: "Text to send to the terminal user" },
     },
     permission: "auto",
   },

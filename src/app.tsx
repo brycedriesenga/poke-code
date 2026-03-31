@@ -6,7 +6,7 @@ import { CronExpressionParser } from "cron-parser";
 import { Box, render, Text, useInput } from "ink";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PokeApiClient } from "./api/client.js";
-import { conversationLoop, createPollFn } from "./api/conversation.js";
+import { conversationLoop, type PollFn } from "./api/conversation.js";
 import { getCommandList, routeCommand } from "./commands/router.js";
 import { ConfigStore } from "./config/store.js";
 import { ContextBuilder } from "./context/builder.js";
@@ -15,13 +15,14 @@ import { parseNaturalSchedule } from "./cron/natural-schedule.js";
 import { CronScheduler } from "./cron/scheduler.js";
 import { CronStorage } from "./cron/storage.js";
 import { canImsgSend, imsgSend } from "./db/imsg-sender.js";
-import { ChatDbPoller } from "./db/poller.js";
 import { stripCommands } from "./parser/strip-commands.js";
 import { AutoDream } from "./services/autodream.js";
 import { SessionManager } from "./session/manager.js";
 import { StartupProfiler } from "./startup.js";
+import { IMessageTransport } from "./transport/IMessageTransport.js";
 import { ToolExecutor } from "./tools/executor.js";
 import { ToolRegistry } from "./tools/registry.js";
+import { MCPTransport } from "./transport/MCPTransport.js";
 import type { PermissionMode, ToolCall, ToolResult } from "./types.js";
 import { formatErrorWithHint } from "./ui/error-display.js";
 import { InputHistory } from "./ui/input-history.js";
@@ -37,6 +38,9 @@ export interface AppProps {
   apiKey: string;
   configDir: string;
   cwd: string;
+  transport: "imessage" | "mcp";
+  mcpServerUrl?: string;
+  mcpProtocols?: string[];
   chatId?: number;
   handleId?: number;
   dbPath: string;
@@ -70,6 +74,9 @@ function App(props: AppProps) {
     apiKey,
     configDir,
     cwd,
+    transport,
+    mcpServerUrl,
+    mcpProtocols,
     chatId,
     handleId,
     dbPath,
@@ -102,8 +109,8 @@ function App(props: AppProps) {
   const registry = useRef(new ToolRegistry());
   const contextBuilder = useRef(new ContextBuilder(registry.current, cwd, configDir));
   const sessionManager = useRef(new SessionManager(`${configDir}/sessions`));
-  const pollerRef = useRef<ChatDbPoller | null>(null);
-  const lastSeenRowId = useRef<number>(0);
+  const imessageTransportRef = useRef<IMessageTransport | null>(null);
+  const mcpTransportRef = useRef<MCPTransport | null>(null);
   const alwaysAllowed = useRef<Set<string>>(new Set());
   const inputHistory = useRef(new InputHistory());
   const cronScheduler = useRef<CronScheduler | null>(null);
@@ -188,29 +195,49 @@ function App(props: AppProps) {
     };
   }, [resumeSessionId, cwd, props.verbose, configDir]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Set up chat.db poller for receiving messages
+  // Set up iMessage transport for receiving messages
   useEffect(() => {
+    if (transport !== "imessage") return;
     if (!chatId || !handleId) return;
     try {
-      const poller = new ChatDbPoller(dbPath, {});
-      poller.setHandle(handleId, chatId);
-      const initial = poller.loadInitialMessages();
-      if (initial.length > 0) {
-        lastSeenRowId.current = initial[initial.length - 1].rowId;
-      }
-      pollerRef.current = poller;
+      const imessageTransport = new IMessageTransport({ dbPath, chatId, handleId });
+      void imessageTransport.initialize();
+      imessageTransportRef.current = imessageTransport;
       return () => {
-        poller.close();
+        imessageTransport.close();
+        imessageTransportRef.current = null;
       };
     } catch {
       // DB not accessible
     }
-  }, [chatId, handleId, dbPath]);
+  }, [transport, chatId, handleId, dbPath]);
 
   const appendMessage = useCallback((msg: UiMessage) => {
     setMessages((prev) => [...prev, msg]);
     setMessageCount((prev) => prev + 1);
   }, []);
+
+  // Set up MCP transport for receiving messages
+  useEffect(() => {
+    if (transport !== "mcp") return;
+    if (!mcpServerUrl) return;
+
+    const mcpTransport = new MCPTransport({ url: mcpServerUrl, protocols: mcpProtocols });
+    mcpTransportRef.current = mcpTransport;
+    mcpTransport.onMessage((message) => {
+      appendMessage({ role: "assistant", content: message });
+    });
+
+    void mcpTransport.initialize().catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      appendMessage({ role: "system", content: formatErrorWithHint(`MCP connection failed: ${msg}`) });
+    });
+
+    return () => {
+      mcpTransport.close();
+      mcpTransportRef.current = null;
+    };
+  }, [transport, mcpServerUrl, mcpProtocols, appendMessage]);
 
   const handleSend = useCallback(
     async (text: string) => {
@@ -532,27 +559,47 @@ function App(props: AppProps) {
       setToolResults([]);
 
       try {
-        // Build pollFn from chat.db poller
-        if (!pollerRef.current) {
-          const fullMessage = contextBuilder.current.build(trimmed, systemPrompt);
-          await apiClient.current.sendMessage(fullMessage);
-          appendMessage({
-            role: "system",
-            content: "Message sent. (Set chatId/handleId in ~/.poke/config.json to receive responses)",
-          });
-          setWaiting(false);
-          return;
+        let pollFn: PollFn;
+        let sendMessageFn: ((text: string) => Promise<void>) | undefined;
+        let sendResultsFn: ((text: string) => Promise<void>) | undefined;
+
+        if (transport === "mcp") {
+          if (!mcpTransportRef.current) {
+            throw new Error("MCP transport is not configured. Set mcp.serverUrl and restart poke-code.");
+          }
+          let pendingResponse: Promise<string> | null = null;
+          sendMessageFn = async (text: string) => {
+            pendingResponse = mcpTransportRef.current?.request(text, 60_000) ?? null;
+            if (!pendingResponse) {
+              throw new Error("MCP transport became unavailable while sending.");
+            }
+          };
+          pollFn = async (onChunk) => {
+            if (!pendingResponse) {
+              throw new Error("No MCP response is pending.");
+            }
+            const response = await pendingResponse;
+            pendingResponse = null;
+            onChunk(response);
+            return response;
+          };
+        } else {
+          if (!imessageTransportRef.current) {
+            const fullMessage = contextBuilder.current.build(trimmed, systemPrompt);
+            await apiClient.current.sendMessage(fullMessage);
+            appendMessage({
+              role: "system",
+              content: "Message sent. (Set chatId/handleId in ~/.poke/config.json to receive responses)",
+            });
+            setWaiting(false);
+            return;
+          }
+          pollFn = imessageTransportRef.current.createPollFn();
+
+          // Use imsg send for tool results when available (bypasses Poke API, more reliable for large payloads)
+          const imsgAvailable = chatId ? await canImsgSend() : false;
+          sendResultsFn = chatId && imsgAvailable ? (text: string) => imsgSend(chatId, text) : undefined;
         }
-
-        const pollFn = createPollFn(pollerRef.current, lastSeenRowId.current, {
-          onRowIdAdvance: (rowId) => {
-            lastSeenRowId.current = rowId;
-          },
-        });
-
-        // Use imsg send for tool results when available (bypasses Poke API, more reliable for large payloads)
-        const imsgAvailable = chatId ? await canImsgSend() : false;
-        const sendResultsFn = chatId && imsgAvailable ? (text: string) => imsgSend(chatId, text) : undefined;
 
         const events = conversationLoop(trimmed, {
           apiClient: apiClient.current,
@@ -563,6 +610,8 @@ function App(props: AppProps) {
           noTools,
           pollFn,
           sendResultsFn,
+          sendMessageFn,
+          contextOptions: { transport },
         });
 
         let pendingToolResults: ToolResult[] = [];
@@ -681,6 +730,7 @@ function App(props: AppProps) {
       permissionMode,
       verboseMode,
       reducedMotion,
+      transport,
       chatId,
       handleId,
       sessionId,

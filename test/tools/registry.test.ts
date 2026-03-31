@@ -12,6 +12,7 @@ describe("ToolRegistry", () => {
       "grep",
       "list_dir",
       "read_file",
+      "reply_to_terminal",
       "web_fetch",
       "web_search",
       "write_file",
@@ -50,6 +51,7 @@ describe("ToolRegistry", () => {
     const registry = new ToolRegistry();
     expect(registry.getPermission("read_file", "readonly")).toBe("auto");
     expect(registry.getPermission("glob", "readonly")).toBe("auto");
+    expect(registry.getPermission("reply_to_terminal", "readonly")).toBe("auto");
   });
 
   it("returns deny for unknown tools", () => {
