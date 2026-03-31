@@ -1,5 +1,21 @@
-import { createPatch } from "diff";
+import { createPatch, diffWords } from "diff";
 import { Box, Text } from "ink";
+
+export interface WordDiffResult {
+  removed: string[];
+  added: string[];
+}
+
+export function computeWordDiff(oldStr: string, newStr: string): WordDiffResult {
+  const changes = diffWords(oldStr, newStr);
+  const removed: string[] = [];
+  const added: string[] = [];
+  for (const change of changes) {
+    if (change.removed) removed.push(change.value.trim());
+    if (change.added) added.push(change.value.trim());
+  }
+  return { removed: removed.filter(Boolean), added: added.filter(Boolean) };
+}
 
 interface DiffViewProps {
   filePath: string;
@@ -17,14 +33,14 @@ export function DiffView({ filePath, oldContent, newContent, context = 3 }: Diff
       {lines.map((line, i) => {
         if (line.startsWith("+")) {
           return (
-            <Text key={i} color="green">
+            <Text key={i} color="#4caf50">
               {line}
             </Text>
           );
         }
         if (line.startsWith("-")) {
           return (
-            <Text key={i} color="red">
+            <Text key={i} color="#e05252">
               {line}
             </Text>
           );
