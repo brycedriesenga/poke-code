@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { WebSocketServer, type WebSocket } from "ws";
+import { WebSocketServer } from "ws";
 import type { PokeApiClient } from "../api/client.js";
 
 export interface LocalMcpServerOptions {
@@ -13,7 +13,7 @@ export class LocalMcpServer {
   private readonly port: number;
   private readonly apiClient: PokeApiClient;
   private httpServer: Server | null = null;
-  private wsServer: WebSocketServer | null = null;
+  private wsServer: any = null;
 
   constructor(options: LocalMcpServerOptions) {
     this.host = options.host;
@@ -27,8 +27,8 @@ export class LocalMcpServer {
     const httpServer = createServer();
     const wsServer = new WebSocketServer({ server: httpServer });
 
-    wsServer.on("connection", (socket) => {
-      socket.on("message", (raw) => {
+    wsServer.on("connection", (socket: any) => {
+      socket.on("message", (raw: string | Buffer) => {
         void this.handleMessage(socket, raw.toString());
       });
     });
@@ -62,7 +62,7 @@ export class LocalMcpServer {
     this.httpServer = null;
   }
 
-  private async handleMessage(socket: WebSocket, payload: string): Promise<void> {
+  private async handleMessage(socket: any, payload: string): Promise<void> {
     let id: string | undefined;
     let text = "";
     try {
