@@ -391,7 +391,10 @@ function App(props: AppProps) {
               break;
             }
             case "tool_use":
-              // Don't show per-tool messages — wait for batch summary
+              appendMessage({
+                role: "system",
+                content: `  ⏳ ${event.toolCall.tool} ${event.toolCall.params.path ?? event.toolCall.params.command ?? event.toolCall.params.pattern ?? ""}`,
+              });
               break;
             case "tool_result":
               pendingToolResults.push(event.result);
@@ -399,7 +402,8 @@ function App(props: AppProps) {
               if (verboseMode) {
                 const label = event.result.params.path ?? event.result.params.command ?? "";
                 const preview = event.result.error ? `Error: ${event.result.error}` : event.result.output.slice(0, 200);
-                appendMessage({ role: "system", content: `  ◆ ${event.result.tool} ${label}\n    ${preview}` });
+                const marker = event.result.error ? "✗" : "✓";
+                appendMessage({ role: "system", content: `  ${marker} ${event.result.tool} ${label}\n    ${preview}` });
               }
               if (sessionId) {
                 sessionManager.current.append(sessionId, {
