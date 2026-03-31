@@ -17,6 +17,7 @@ import { SessionManager } from "./session/manager.js";
 import { ToolExecutor } from "./tools/executor.js";
 import { ToolRegistry } from "./tools/registry.js";
 import type { PermissionMode, ToolCall, ToolResult } from "./types.js";
+import { formatErrorWithHint } from "./ui/error-display.js";
 import { InputHistory } from "./ui/input-history.js";
 import { MessageView } from "./ui/message.js";
 import { useTerminalSize, computeAppHeight } from "./ui/use-terminal-size.js";
@@ -427,7 +428,7 @@ function App(props: AppProps) {
               });
               break;
             case "error":
-              appendMessage({ role: "system", content: `Error: ${event.message}` });
+              appendMessage({ role: "system", content: formatErrorWithHint(event.message) });
               break;
             case "done":
               break;
@@ -482,7 +483,7 @@ function App(props: AppProps) {
         }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        appendMessage({ role: "system", content: `Error: ${msg}` });
+        appendMessage({ role: "system", content: formatErrorWithHint(msg) });
       } finally {
         setWaiting(false);
         setPendingPermission(null);
